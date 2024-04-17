@@ -81,7 +81,7 @@ class App(tk.Tk):
 
         def on_model_file_input_click():
             new_model_file = fd.askopenfilename(filetypes=[("ONNX files", "*.onnx")])
-            if new_model_file == ():
+            if new_model_file in ((), ""):
                 return
             self.piper_model_file = new_model_file
             self.piper_model_file_input["text"] = new_model_file.split(os.sep)[-1]
@@ -106,10 +106,11 @@ class App(tk.Tk):
 
         def on_text_file_input_click():
             new_text_file = fd.askopenfilename(filetypes=[("Text files", "*.txt")])
-            if new_text_file == ():
+            if new_text_file in ((), ""):
                 return
             self.text_file = new_text_file
             self.text_file_input["text"] = new_text_file.split(os.sep)[-1]
+            self.text_file_input.config(highlightbackground="#d9d9d9")
 
         self.text_file_input = tk.Button(
             self, text="Choose a text file...", command=on_text_file_input_click
@@ -132,10 +133,11 @@ class App(tk.Tk):
 
         def on_output_dir_input_click():
             new_dir = fd.askdirectory()
-            if new_dir == ():
+            if new_dir in ((), ""):
                 return
             self.output_dir = new_dir
             self.output_dir_input["text"] = new_dir.split(os.sep)[-1]
+            self.output_dir_input.config(highlightbackground="#d9d9d9")
 
         self.output_dir_input = tk.Button(
             self,
@@ -185,7 +187,78 @@ class App(tk.Tk):
 
     def generate_anki_deck(self):
         """Open new window showing the progress of generating Anki deck"""
-        pass
+        progress_window = tk.Toplevel(self)
+        progress_window.title("Generating Anki Deck")
+        progress_window.geometry("400x200")
+        progress_window.resizable(False, False)
+
+        progress_bar = ttk.Progressbar(progress_window, length=300, mode="determinate")
+        progress_bar.pack(pady=50)
+
+        deck = genanki.Deck(self.anki_deck_id, self.anki_deck_name)
+
+        model = genanki.Model(
+            self.anki_model_id,
+            "TTS Model",
+            fields=[
+                {"name": "Audio"},
+                {"name": "Text"},
+            ],
+            templates=[
+                {
+                    "name": "Card 1",
+                    "qfmt": "{{Audio}}",
+                    "afmt": '{{FrontSide}}<hr id="answer">{{Text}}',
+                },
+            ],
+        )
+
+        with open(self.text_file, "r") as f:
+            phrases = f.readlines()
+
+        try:
+            os.makedirs(f"{self.output_dir}{os.sep}audios")
+        except FileExistsError:
+            pass
+
+        for i, phrase in enumerate(phrases):
+            if self.is_pairs and i % 2 != 0:
+                continue
+
+            audio_index = i if not self.is_pairs else i // 2
+
+            tts.tts_gen(
+                self.output_dir,
+                self.piper_model_file,
+                audio_index,
+                phrase,
+            )
+            note_back = (
+                f"{phrases[i]}\n{phrases[i + 1]}" if self.is_pairs else phrases[i]
+            )
+
+            new_note = genanki.Note(
+                model=model,
+                fields=[
+                    f"[sound:tts_{audio_index}.wav]",
+                    note_back,
+                ],
+            )
+
+            deck.add_note(new_note)
+
+            progress_bar["value"] = i / len(phrases) * 100
+            progress_window.update()
+
+        # create package
+        my_package = genanki.Package(deck)
+        my_package.media_files = [
+            f"{self.output_dir}{os.sep}audios{os.sep}tts_{i}.wav"
+            for i in range(len(phrases) // 2 if self.is_pairs else len(phrases))
+        ]
+        my_package.write_to_file(
+            os.path.join(self.output_dir, f"{self.anki_deck_name}.apkg")
+        )
 
 
 if __name__ == "__main__":
