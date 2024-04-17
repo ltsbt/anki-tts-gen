@@ -14,8 +14,8 @@ class App(tk.Tk):
 
         self.title("Anki TTS Generator")
 
-        WIDTH = 400
-        HEIGHT = 250
+        WIDTH = 350
+        HEIGHT = 300
         x_offset = (self.winfo_screenwidth() - WIDTH) // 2
         y_offset = (self.winfo_screenheight() - HEIGHT) // 2
 
@@ -39,10 +39,15 @@ class App(tk.Tk):
         self.piper_model_file = ""
         """Piper model file"""
         self.text_file = ""
-        self.is_pairs = tk.BooleanVar()
+        """Text file containing phrases"""
+        self.is_pairs = tk.BooleanVar(value=False)
+        """Whether the input text file is a list of translation pairs or single language sentences"""
+        self.keep_audio = tk.BooleanVar(value=False)
+        """Whether to keep audio files after generating the Anki deck"""
         self.output_dir = ""
-
+        """Output directory for the Anki deck"""
         self.exists_model_json = False
+        """Whether a JSON file exists for the model"""
 
         # read deck name
         deck_name_label = tk.Label(self, text="Deck Name:")
@@ -72,12 +77,12 @@ class App(tk.Tk):
 
         # choose .onnx model file
         model_file_label = tk.Label(self, text="Model File:")
-        # invisible button
+        # warning button for missing JSON file
         model_json_warning = tk.Button(
             self,
             text="↻ No JSON file found for this model. Click to retry.",
+            highlightbackground="red",
         )
-        model_json_warning.config(highlightbackground="red")
 
         def on_model_file_input_click():
             new_model_file = fd.askopenfilename(filetypes=[("ONNX files", "*.onnx")])
@@ -87,9 +92,12 @@ class App(tk.Tk):
             self.piper_model_file_input["text"] = new_model_file.split(os.sep)[-1]
             # check if, in the same directory, there is a file with the same name + ".json"
             self.exists_model_json = os.path.exists(self.piper_model_file + ".json")
+
+            # only show warning button if the JSON file does not exist
             if not self.exists_model_json:
                 model_json_warning.grid(row=15, column=0, columnspan=2, sticky="ew")
                 self.piper_model_file_input.config(highlightbackground="red")
+            # otherwise, hide the button
             else:
                 model_json_warning.grid_forget()
                 self.piper_model_file_input.config(highlightbackground="#d9d9d9")
@@ -119,9 +127,8 @@ class App(tk.Tk):
         text_file_label.grid(row=2, column=0, sticky="w")
         self.text_file_input.grid(row=2, column=1, sticky="ew")
 
-        # toggle whether the input text file is a list of translation pairs or single language sentences
+        # toggle is_pairs
         pairs_label = tk.Label(self, text="Input Type:")
-        self.is_pairs = tk.BooleanVar()
         pairs_checkbox = tk.Checkbutton(
             self, text="Translation Pairs", variable=self.is_pairs
         )
@@ -146,6 +153,14 @@ class App(tk.Tk):
         )
         output_dir_label.grid(row=4, column=0, sticky="w")
         self.output_dir_input.grid(row=4, column=1, sticky="ew")
+
+        # toggle keep_audio
+        keep_audio_label = tk.Label(self, text="Keep Audio Files:")
+        keep_audio_checkbox = tk.Checkbutton(
+            self, text="Keep audio files", variable=self.keep_audio
+        )
+        keep_audio_label.grid(row=5, column=0, sticky="w")
+        keep_audio_checkbox.grid(row=5, column=1, sticky="ew")
 
         # submit button
         submit_button = tk.Button(self, text="Generate deck", command=self.submit)
@@ -189,11 +204,15 @@ class App(tk.Tk):
         """Open new window showing the progress of generating Anki deck"""
         progress_window = tk.Toplevel(self)
         progress_window.title("Generating Anki Deck")
-        progress_window.geometry("400x200")
+        width = 400
+        height = 200
+        x_offset = (self.winfo_screenwidth() - width) // 2
+        y_offset = (self.winfo_screenheight() - height) // 2
+        progress_window.geometry(f"{width}x{height}+{x_offset}+{y_offset}")
         progress_window.resizable(False, False)
 
         progress_bar = ttk.Progressbar(progress_window, length=300, mode="determinate")
-        progress_bar.pack(pady=50)
+        progress_bar.pack(pady=[50, 10])
 
         deck = genanki.Deck(self.anki_deck_id, self.anki_deck_name)
 
@@ -216,16 +235,15 @@ class App(tk.Tk):
         with open(self.text_file, "r") as f:
             phrases = f.readlines()
 
-        try:
+        dir_exists = os.path.exists(f"{self.output_dir}{os.sep}audios")
+        if not dir_exists:
             os.makedirs(f"{self.output_dir}{os.sep}audios")
-        except FileExistsError:
-            pass
 
         for i, phrase in enumerate(phrases):
             if self.is_pairs and i % 2 != 0:
                 continue
 
-            audio_index = i if not self.is_pairs else i // 2
+            audio_index = i if not self.is_pairs.get() else i // 2
 
             tts.tts_gen(
                 self.output_dir,
@@ -233,8 +251,9 @@ class App(tk.Tk):
                 audio_index,
                 phrase,
             )
+
             note_back = (
-                f"{phrases[i]}\n{phrases[i + 1]}" if self.is_pairs else phrases[i]
+                f"{phrases[i]}\n{phrases[i + 1]}" if self.is_pairs.get() else phrases[i]
             )
 
             new_note = genanki.Note(
@@ -250,15 +269,40 @@ class App(tk.Tk):
             progress_bar["value"] = i / len(phrases) * 100
             progress_window.update()
 
+        progress_bar["value"] = 100
+        progress_window.update()
+
+        # success message
+        success_label = tk.Label(
+            progress_window, text="Anki deck generated successfully!"
+        )
+        success_label.pack(pady=10)
+
+        # button to close the progress window
+        close_button = tk.Button(
+            progress_window, text="Close", command=progress_window.destroy
+        )
+        close_button.pack(pady=10)
+
         # create package
         my_package = genanki.Package(deck)
         my_package.media_files = [
             f"{self.output_dir}{os.sep}audios{os.sep}tts_{i}.wav"
-            for i in range(len(phrases) // 2 if self.is_pairs else len(phrases))
+            for i in range(len(phrases) // 2 if self.is_pairs.get() else len(phrases))
         ]
-        my_package.write_to_file(
-            os.path.join(self.output_dir, f"{self.anki_deck_name}.apkg")
-        )
+        my_package.write_to_file(f"{self.output_dir}{os.sep}{self.anki_deck_name}.apkg")
+
+        # delete audio files if keep_audio is not checked
+        if not self.keep_audio.get():
+            if not dir_exists:
+                for file in os.listdir(f"{self.output_dir}{os.sep}audios"):
+                    os.remove(f"{self.output_dir}{os.sep}audios{os.sep}{file}")
+                os.rmdir(f"{self.output_dir}{os.sep}audios")
+            else:
+                for i in range(
+                    len(phrases) // 2 if self.is_pairs.get() else len(phrases)
+                ):
+                    os.remove(f"{self.output_dir}{os.sep}audios{os.sep}tts_{i}.wav")
 
 
 if __name__ == "__main__":
